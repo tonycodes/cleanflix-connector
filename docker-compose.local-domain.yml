@@ -25,4 +25,4 @@ services:
 networks:
   shared:
     external: true
-    name: ${SHARED_NETWORK:-ordernow-shared}
+    name: ${SHARED_NETWORK:-local-proxy}
