@@ -1,0 +1,28 @@
+services:
+  connector:
+    image: node:22-alpine
+    restart: unless-stopped
+    working_dir: /app
+    command: ["node", "--watch", "server.js"]
+    environment:
+      PORT: 8787
+      PUBLIC_BASE_URL: https://${APP_HOST}
+      APPROVAL_BASE_URL: https://${APP_HOST}
+      PAIRING_SECRET: ${PAIRING_SECRET}
+      MEDIA_ROOT: /media
+    volumes:
+      - ./:/app
+      - ${MEDIA_ROOT:?Set MEDIA_ROOT in .env}:/media:ro
+    labels:
+      caddy: ${APP_HOST}
+      caddy.tls: internal
+      caddy.reverse_proxy: "{{upstreams 8787}}"
+      caddy.reverse_proxy.header_up_0: "X-Forwarded-Host {host}"
+      caddy.reverse_proxy.header_up_1: "X-Forwarded-Proto https"
+    networks:
+      - shared
+
+networks:
+  shared:
+    external: true
+    name: ${SHARED_NETWORK:-ordernow-shared}
