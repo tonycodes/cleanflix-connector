@@ -1,0 +1,6 @@
+{
+  "name": "cleanstream-media-connector-reference",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node server.js" }
+}
