@@ -19,7 +19,7 @@ const videos = () => [
   .map(file => ({ id: Buffer.from(file).toString('base64url'), title: path.basename(file, path.extname(file)), type: 'video', description: file })) : []),
   ...(demoStreamUrl ? [{ id: 'demo-stream', title: 'Connector playback test', type: 'video', description: 'Staging test stream' }] : []),
 ];
-const json = (res, code, value) => { res.writeHead(code, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
+const json = (res, code, value) => { const body = JSON.stringify(value); console.log(`${code} ${body}`); res.writeHead(code, { 'content-type': 'application/json' }); res.end(body); };
 const readJson = req => new Promise((resolve, reject) => { let raw = ''; req.on('data', d => raw += d); req.on('end', () => { try { resolve(JSON.parse(raw || '{}')); } catch { reject(new Error('Invalid JSON')); } }); });
 const bearer = req => req.headers.authorization?.replace(/^Bearer\s+/i, '');
 const authenticated = req => tokens.has(bearer(req));
