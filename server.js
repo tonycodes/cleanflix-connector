@@ -27,6 +27,7 @@ const id = () => crypto.randomBytes(24).toString('base64url');
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, publicBaseUrl);
+  console.log(`${req.method} ${url.pathname}`);
   if (req.method === 'GET' && url.pathname === '/.well-known/cleanstream-connector.json') return json(res, 200, {
     protocolVersion: 1, id: 'reference.home-library', name: 'Reference Home Library', capabilities: ['catalog', 'stream'],
     endpoints: { catalog: '/v1/catalog', stream: '/v1/stream', pairStart: '/v1/pair/start', pairStatus: '/v1/pair/{sessionId}', pairToken: '/v1/pair/token' }
