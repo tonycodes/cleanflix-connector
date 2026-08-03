@@ -33,7 +33,7 @@ http.createServer(async (req, res) => {
     endpoints: { catalog: '/v1/catalog', stream: '/v1/stream', pairStart: '/v1/pair/start', pairStatus: '/v1/pair/{sessionId}', pairToken: '/v1/pair/token' }
   });
   if (req.method === 'POST' && url.pathname === '/v1/pair/start') {
-    const body = await readJson(req); if (body.codeChallengeMethod !== 'S256' || !body.codeChallenge) return json(res, 400, { error: 'PKCE S256 required' });
+    const body = await readJson(req); if ((body.codeChallengeMethod || 'S256') !== 'S256' || !body.codeChallenge) return json(res, 400, { error: 'PKCE S256 required' });
     const sessionId = id(); sessions.set(sessionId, { challenge: body.codeChallenge, expires: Date.now() + 300000 });
     return json(res, 200, { sessionId, approvalUri: `${approvalBaseUrl}/pair/approve?session=${sessionId}`, expiresAt: new Date(Date.now() + 300000).toISOString(), pollIntervalSeconds: 2 });
   }
