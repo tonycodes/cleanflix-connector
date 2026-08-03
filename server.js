@@ -8,8 +8,9 @@ const mediaRoot = path.resolve(process.env.MEDIA_ROOT || './media');
 const publicBaseUrl = (process.env.PUBLIC_BASE_URL || `http://localhost:${port}`).replace(/\/$/, '');
 const approvalBaseUrl = (process.env.APPROVAL_BASE_URL || publicBaseUrl).replace(/\/$/, '');
 const pairingSecret = process.env.PAIRING_SECRET;
+const pairingPasswordHash = process.env.PAIRING_PASSWORD_HASH;
 const demoStreamUrl = process.env.DEMO_STREAM_URL;
-if (!pairingSecret) throw new Error('PAIRING_SECRET is required');
+if (!pairingSecret && !pairingPasswordHash) throw new Error('PAIRING_PASSWORD_HASH or PAIRING_SECRET is required');
 
 const sessions = new Map();
 const tokens = new Map();
@@ -24,6 +25,15 @@ const readJson = req => new Promise((resolve, reject) => { let raw = ''; req.on(
 const bearer = req => req.headers.authorization?.replace(/^Bearer\s+/i, '');
 const authenticated = req => tokens.has(bearer(req));
 const id = () => crypto.randomBytes(24).toString('base64url');
+const passwordMatches = value => {
+  if (pairingPasswordHash) {
+    const [salt, expected] = pairingPasswordHash.split(':');
+    if (!salt || !expected) return false;
+    const actual = crypto.scryptSync(value, salt, 32).toString('base64url');
+    return crypto.timingSafeEqual(Buffer.from(actual), Buffer.from(expected));
+  }
+  return Boolean(pairingSecret) && crypto.timingSafeEqual(Buffer.from(value), Buffer.from(pairingSecret));
+};
 
 http.createServer(async (req, res) => {
   const url = new URL(req.url, publicBaseUrl);
@@ -38,7 +48,7 @@ http.createServer(async (req, res) => {
     return json(res, 200, { sessionId, approvalUri: `${approvalBaseUrl}/pair/approve?session=${sessionId}`, expiresAt: new Date(Date.now() + 300000).toISOString(), pollIntervalSeconds: 2 });
   }
   if (req.method === 'GET' && url.pathname === '/pair/approve') { res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }); return res.end('<form method="post"><input name="secret" type="password" placeholder="Pairing secret"><button>Approve TV</button></form>'); }
-  if (req.method === 'POST' && url.pathname === '/pair/approve') { let raw=''; req.on('data', d => raw += d); req.on('end', () => { const session=sessions.get(url.searchParams.get('session')); if (!session || new URLSearchParams(raw).get('secret') !== pairingSecret) { res.statusCode=403; return res.end('Denied'); } session.code=id(); res.end('Approved. Return to your TV.'); }); return; }
+  if (req.method === 'POST' && url.pathname === '/pair/approve') { let raw=''; req.on('data', d => raw += d); req.on('end', () => { const session=sessions.get(url.searchParams.get('session')); if (!session || !passwordMatches(new URLSearchParams(raw).get('secret') || '')) { res.statusCode=403; return res.end('Denied'); } session.code=id(); res.end('Approved. Return to your TV.'); }); return; }
   if (req.method === 'GET' && url.pathname.startsWith('/v1/pair/')) { const session=sessions.get(url.pathname.split('/').pop()); if (!session || session.expires < Date.now()) return json(res, 200, { status: 'expired' }); return json(res, 200, session.code ? { status: 'approved', authorizationCode: session.code } : { status: 'pending' }); }
   if (req.method === 'POST' && url.pathname === '/v1/pair/token') { const body=await readJson(req), session=sessions.get(body.sessionId); const challenge=crypto.createHash('sha256').update(body.codeVerifier || '').digest('base64url'); if (!session || session.code !== body.authorizationCode || session.challenge !== challenge) return json(res, 403, { error: 'Invalid pairing exchange' }); const token=id(); tokens.set(token, Date.now()+2592000000); sessions.delete(body.sessionId); return json(res, 200, { accessToken: token, expiresAt: new Date(tokens.get(token)).toISOString(), scopes: ['catalog','stream'] }); }
   if (req.method === 'GET' && url.pathname === '/v1/catalog') return authenticated(req) ? json(res, 200, { items: videos() }) : json(res, 401, { error: 'Unauthorized' });

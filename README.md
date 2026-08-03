@@ -11,6 +11,11 @@ For production, place the service behind HTTPS and set `PUBLIC_BASE_URL` and
 approval form protected by `PAIRING_SECRET`; replace that form with your own
 identity provider for a production connector.
 
+For a password-protected production connector, generate a local owner password
+hash with `node hash-password.js <password>` and set `PAIRING_PASSWORD_HASH`.
+`PAIRING_SECRET` is a staging-only convenience PIN and must not be used for a
+shared deployment.
+
 ## Local OrbStack development
 
 Copy `.env.example` to `.env`, set `MEDIA_ROOT` to an absolute directory with
