@@ -2,5 +2,13 @@
   "name": "cleanstream-media-connector-reference",
   "private": true,
   "type": "module",
-  "scripts": { "start": "node server.js" }
+  "scripts": {
+    "start": "node server.js",
+    "package:macos": "sh scripts/build-desktop-package.sh macos",
+    "package:linux": "sh scripts/build-desktop-package.sh linux",
+    "package:windows": "sh scripts/build-desktop-package.sh windows"
+  },
+  "dependencies": {
+    "guessit-js": "^4.0.0"
+  }
 }

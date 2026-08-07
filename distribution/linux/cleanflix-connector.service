@@ -1,0 +1,14 @@
+[Unit]
+Description=Cleanflix personal media connector
+After=network-online.target
+
+[Service]
+Type=simple
+Environment=CLEANFLIX_APP_ROOT=%h/.local/lib/cleanflix-connector
+Environment=CLEANFLIX_CONFIG_PATH=%h/.config/cleanflix-connector/config.env
+Environment=CLEANFLIX_NODE=%h/.local/lib/cleanflix-connector/node/bin/node
+ExecStart=%h/.local/lib/cleanflix-connector/distribution/common/start-connector.sh
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
