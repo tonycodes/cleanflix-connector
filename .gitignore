@@ -1,1 +1,9 @@
 .env
+
+# Tauri desktop
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/sidecar/node/
+desktop/dist/
+._*
+**/.DS_Store
