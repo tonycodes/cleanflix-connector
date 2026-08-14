@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "test": "node --test library.test.js",
     "package:macos": "sh scripts/build-desktop-package.sh macos",
     "package:linux": "sh scripts/build-desktop-package.sh linux",
     "package:windows": "sh scripts/build-desktop-package.sh windows"

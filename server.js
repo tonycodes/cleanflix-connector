@@ -59,6 +59,20 @@ const admin = req => {
 const html = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const libraryPage = items => `<!doctype html><title>CleanStream Library</title><style>body{font:16px system-ui;max-width:1100px;margin:2rem auto}form{display:grid;grid-template-columns:2fr 2fr 1fr auto;gap:.5rem;margin:.5rem 0}input{padding:.5rem}small{grid-column:1/-1;color:#666}</style><h1>Library review</h1><p>Confirm titles and IMDb IDs. Original files are never renamed or moved.</p>${items.map(item => `<form method="post" action="/library/mapping"><input type="hidden" name="file" value="${encodeURIComponent(item.file)}"><input name="title" value="${html(item.title)}"><input name="imdbId" placeholder="tt1234567" value="${html(item.imdbId || item.suggestedImdbId || '')}"><input name="year" value="${item.year || ''}" placeholder="year"><button>Save</button><small>${html(item.file)}${item.candidate ? ` · TMDB: ${html(item.candidate.title)} (${html(item.candidate.year)})` : ''}</small></form>`).join('')}`;
 
+const resolveMediaTarget = file => {
+  if (!file || file.includes('..')) return null;
+  const target = path.resolve(mediaRoot, file);
+  if (!target.startsWith(`${mediaRoot}${path.sep}`)) return null;
+  try {
+    const stat = fs.statSync(target);
+    if (stat.isFile()) return target;
+    if (stat.isDirectory()) {
+      const nested = path.join(target, path.basename(target));
+      if (nested.startsWith(`${mediaRoot}${path.sep}`) && fs.statSync(nested).isFile()) return nested;
+    }
+  } catch {}
+  return null;
+};
 http.createServer(async (req, res) => {
   const url = new URL(req.url, publicBaseUrl);
   console.log(`${req.method} ${url.pathname}`);
@@ -89,7 +103,31 @@ http.createServer(async (req, res) => {
     const item = await library.metadata(url.searchParams.get('id') || '');
     return item ? json(res, 200, { item: { ...item, imdbId: item.imdbId || item.suggestedImdbId, description: item.description || item.file } }) : json(res, 404, { error: 'Not found' });
   }
-  if (req.method === 'POST' && url.pathname === '/v1/stream') { if (!authenticated(req)) return json(res,401,{error:'Unauthorized'}); const body=await readJson(req); if (body.id === 'demo-stream' && demoStreamUrl) return json(res,200,{streams:[{id:'demo-stream',url:demoStreamUrl,filename:'demo.m3u8',headers:{}}]}); const file=Buffer.from(body.id || '', 'base64url').toString(); if (!(await videos()).some(v => v.id === body.id) || file.includes('..')) return json(res,404,{error:'Not found'}); return json(res,200,{streams:[{id:body.id,url:`${publicBaseUrl}/v1/media/${body.id}?token=${bearer(req)}`,filename:path.basename(file),headers:{}}]}); }
-  if (req.method === 'GET' && url.pathname.startsWith('/v1/media/')) { const token=url.searchParams.get('token'); const file=Buffer.from(url.pathname.split('/').pop(), 'base64url').toString(); const target=path.resolve(mediaRoot,file); if (!tokens.has(token) || !target.startsWith(`${mediaRoot}${path.sep}`) || !fs.existsSync(target)) return json(res,404,{error:'Not found'}); res.writeHead(200,{'content-type':'application/octet-stream','content-length':fs.statSync(target).size}); return fs.createReadStream(target).pipe(res); }
+  if (req.method === 'POST' && url.pathname === '/v1/stream') { if (!authenticated(req)) return json(res,401,{error:'Unauthorized'}); const body=await readJson(req); if (body.id === 'demo-stream' && demoStreamUrl) return json(res,200,{streams:[{id:'demo-stream',url:demoStreamUrl,filename:'demo.m3u8',headers:{}}]}); const members=await library.members(body.id || ''); if (!members?.length || members.some(member => member.file.includes('..'))) return json(res,404,{error:'Not found'}); return json(res,200,{streams:members.map(member => ({id:member.id,url:`${publicBaseUrl}/v1/media/${member.id}?token=${bearer(req)}`,filename:path.basename(member.file),headers:{}}))}); }
+  if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname.startsWith('/v1/media/')) {
+    const token = url.searchParams.get('token');
+    const file = Buffer.from(url.pathname.split('/').pop(), 'base64url').toString();
+    const target = resolveMediaTarget(file);
+    if (!tokens.has(token) || !target) return json(res, 404, { error: 'Not found' });
+    const size = fs.statSync(target).size;
+    const match = req.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+    const start = Number(match?.[1] || 0);
+    const end = Math.min(Number(match?.[2] || size - 1), size - 1);
+    if (match && (start > end || start >= size)) {
+      res.writeHead(416, { 'content-range': `bytes */${size}` });
+      return res.end();
+    }
+    const headers = { 'content-type': 'application/octet-stream', 'accept-ranges': 'bytes', 'content-length': end - start + 1 };
+    if (match) headers['content-range'] = `bytes ${start}-${end}/${size}`;
+    res.writeHead(match ? 206 : 200, headers);
+    if (req.method === 'HEAD') return res.end();
+    const stream = fs.createReadStream(target, { start, end });
+    stream.on('error', error => {
+      console.error(`Media read failed: ${error.message}`);
+      if (!res.headersSent) json(res, 502, { error: 'Media read failed' });
+      else res.destroy(error);
+    });
+    return stream.pipe(res);
+  }
   json(res, 404, { error: 'Not found' });
 }).listen(port, () => console.log(`Connector listening on ${publicBaseUrl}`));

@@ -19,6 +19,68 @@ const nfoFor = (mediaRoot, file) => {
   } catch { return {}; }
 };
 
+
+const slug = value => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+export function catalogGroupKey(item) {
+  const imdb = item.imdbId || item.suggestedImdbId || null;
+  const episode = item.type === 'episode' || (item.season != null && item.episode != null);
+  if (episode) {
+    return imdb && item.season != null && item.episode != null ? `${imdb}:${item.season}:${item.episode}` : null;
+  }
+  if (imdb) return imdb;
+  const title = slug(item.title);
+  return title ? `${title}${item.year ? `-${item.year}` : ''}` : null;
+}
+
+const uniqueFiles = files => {
+  const seen = new Set();
+  return files.filter(file => {
+    if (seen.has(file.id)) return false;
+    seen.add(file.id);
+    return true;
+  });
+};
+
+export function catalogTitleKey(item) {
+  return catalogGroupKey({ ...item, imdbId: null, suggestedImdbId: null });
+}
+
+export function catalogAliases(item) {
+  return new Set([item?.id, item?.imdbId, item?.suggestedImdbId, catalogTitleKey(item)].filter(Boolean));
+}
+
+export function groupCatalog(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = catalogGroupKey(item) || item.id;
+    const members = groups.get(key);
+    if (members) members.push(item);
+    else groups.set(key, [item]);
+  }
+  return [...groups.entries()].flatMap(([id, members]) => {
+    const files = uniqueFiles(members
+      .filter(member => (member.size || 0) > 0)
+      .map(member => ({ id: member.id, file: member.file, size: member.size || 0 }))
+      .sort((a, b) => b.size - a.size || a.file.localeCompare(b.file)));
+    if (!files.length) return [];
+    const representative = members.find(member => member.id === files[0].id) || members[0];
+    return [{ ...representative, id, file: files[0].file, files, size: files[0].size }];
+  });
+}
+
+export function catalogMembers(item, requestedId) {
+  const files = (item?.files || (item ? [{ id: item.id, file: item.file, size: item.size || 0 }] : []))
+    .filter(file => (file.size || 0) > 0)
+    .slice()
+    .sort((a, b) => (b.size || 0) - (a.size || 0) || String(a.file).localeCompare(String(b.file)));
+  if (requestedId && item && !catalogAliases(item).has(requestedId)) {
+    const match = files.find(file => file.id === requestedId);
+    return match ? [match] : [];
+  }
+  return files;
+}
+
 export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
   const metadataCache = new Map();
   const load = () => {
@@ -87,16 +149,18 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
     metadataCache.set(key, pending);
     return pending;
   };
+  let cachedScan = null;
   const scan = async () => {
     const index = load();
-    const files = fs.existsSync(mediaRoot) ? fs.readdirSync(mediaRoot, { recursive: true }).filter(file => video.test(file)) : [];
-    const present = new Set(files);
+    const listed = fs.existsSync(mediaRoot) ? fs.readdirSync(mediaRoot, { recursive: true }).filter(file => video.test(file)) : [];
+    const present = new Set();
+    const items = [];
     let changed = false;
-    for (const file of Object.keys(index.mappings)) {
-      if (!present.has(file) && !index.mappings[file].missing) { index.mappings[file].missing = true; changed = true; }
-    }
-    const items = files.map(file => {
-      const stat = fs.statSync(path.join(mediaRoot, file));
+    for (const file of listed) {
+      let stat;
+      try { stat = fs.statSync(path.join(mediaRoot, file)); } catch { continue; }
+      if (!stat.isFile()) continue;
+      present.add(file);
       const fingerprint = `${stat.size}:${Math.round(stat.mtimeMs)}`;
       const parsed = guessit(path.basename(file));
       const previous = Object.entries(index.mappings).find(([oldPath, value]) => oldPath !== file && value.missing && value.fingerprint === fingerprint)?.[1];
@@ -106,9 +170,10 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
         index.mappings[file] = { ...mapping, fingerprint, missing: false, updatedAt: mapping.updatedAt || new Date().toISOString() };
         changed = true;
       }
-      return {
+      items.push({
         file,
         id: Buffer.from(file).toString('base64url'),
+        size: stat.size,
         title: mapping.title || nfo.title || parsed.title || path.basename(file, path.extname(file)),
         year: mapping.year || nfo.year || parsed.year || null,
         imdbId: mapping.imdbId || nfo.imdbId || parsed.imdb_id || file.match(/\btt\d{7,10}\b/i)?.[0]?.toLowerCase() || null,
@@ -116,8 +181,15 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
         season: mapping.season || parsed.season || null,
         episode: mapping.episode || parsed.episode || null,
         mapped: Boolean(mapping.imdbId),
-      };
-    });
+      });
+    }
+    for (const file of Object.keys(index.mappings)) {
+      if (present.has(file) || index.mappings[file].missing) continue;
+      const size = Number(String(index.mappings[file].fingerprint || '').split(':')[0]);
+      if (size > 0) continue;
+      index.mappings[file].missing = true;
+      changed = true;
+    }
     const discovered = await Promise.all(items.map(discover));
     for (const item of discovered) {
       if (!item.autoMapped || index.mappings[item.file]?.imdbId) continue;
@@ -134,7 +206,31 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       changed = true;
     }
     if (changed) save(index);
+    cachedScan = discovered;
     return discovered;
+  };
+  const itemsFromIndex = () => Object.entries(load().mappings).flatMap(([file, mapping]) => {
+    const size = Number(String(mapping.fingerprint || '').split(':')[0]);
+    if (!size || !video.test(file) || file.includes('..')) return [];
+    const parsed = guessit(path.basename(file));
+    return [{
+      file,
+      id: Buffer.from(file).toString('base64url'),
+      size,
+      title: mapping.title || parsed.title || path.basename(file, path.extname(file)),
+      year: mapping.year || parsed.year || null,
+      imdbId: mapping.imdbId || parsed.imdb_id || file.match(/\btt\d{7,10}\b/i)?.[0]?.toLowerCase() || null,
+      type: parsed.type === 'episode' ? 'episode' : 'video',
+      season: mapping.season || parsed.season || null,
+      episode: mapping.episode || parsed.episode || null,
+      mapped: Boolean(mapping.imdbId),
+    }];
+  });
+  const findItem = (items, id) => items.find(item => catalogAliases(item).has(id) || item.files?.some(file => file.id === id)) || null;
+  let indexGrouped = null;
+  const groupedFromIndex = () => {
+    if (!indexGrouped) indexGrouped = groupCatalog(itemsFromIndex());
+    return indexGrouped;
   };
   return {
     scan,
@@ -155,10 +251,15 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       save(index);
     },
     async catalog() {
-      return Promise.all((await scan()).map(metadataFor));
+      return groupCatalog(await Promise.all((await scan()).map(metadataFor)));
     },
     async metadata(id) {
-      return (await this.catalog()).find(item => item.id === id) || null;
+      return findItem(await this.catalog(), id);
+    },
+    async members(id) {
+      const grouped = cachedScan ? groupCatalog(cachedScan) : groupedFromIndex();
+      const item = findItem(grouped, id);
+      return item ? catalogMembers(item, id) : null;
     },
   };
 }
