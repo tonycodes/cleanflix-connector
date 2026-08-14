@@ -19,6 +19,48 @@ const nfoFor = (mediaRoot, file) => {
   } catch { return {}; }
 };
 
+
+const slug = value => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+export function catalogGroupKey(item) {
+  const imdb = item.imdbId || item.suggestedImdbId || null;
+  const episode = item.type === 'episode' || (item.season != null && item.episode != null);
+  if (episode) {
+    return imdb && item.season != null && item.episode != null ? `${imdb}:${item.season}:${item.episode}` : null;
+  }
+  if (imdb) return imdb;
+  const title = slug(item.title);
+  return title ? `${title}${item.year ? `-${item.year}` : ''}` : null;
+}
+
+export function groupCatalog(items) {
+  const groups = new Map();
+  for (const item of items) {
+    const key = catalogGroupKey(item) || item.id;
+    const members = groups.get(key);
+    if (members) members.push(item);
+    else groups.set(key, [item]);
+  }
+  return [...groups.entries()].map(([id, members]) => {
+    const files = members
+      .map(member => ({ id: member.id, file: member.file, size: member.size || 0 }))
+      .sort((a, b) => b.size - a.size || a.file.localeCompare(b.file));
+    const representative = members.find(member => member.id === files[0].id) || members[0];
+    return { ...representative, id, files };
+  });
+}
+
+export function catalogMembers(item, requestedId) {
+  const files = (item?.files || (item ? [{ id: item.id, file: item.file, size: item.size || 0 }] : []))
+    .slice()
+    .sort((a, b) => (b.size || 0) - (a.size || 0) || String(a.file).localeCompare(String(b.file)));
+  if (requestedId && item && requestedId !== item.id) {
+    const match = files.find(file => file.id === requestedId);
+    return match ? [match] : [];
+  }
+  return files;
+}
+
 export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
   const metadataCache = new Map();
   const load = () => {
@@ -109,6 +151,7 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       return {
         file,
         id: Buffer.from(file).toString('base64url'),
+        size: stat.size,
         title: mapping.title || nfo.title || parsed.title || path.basename(file, path.extname(file)),
         year: mapping.year || nfo.year || parsed.year || null,
         imdbId: mapping.imdbId || nfo.imdbId || parsed.imdb_id || file.match(/\btt\d{7,10}\b/i)?.[0]?.toLowerCase() || null,
@@ -155,10 +198,14 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       save(index);
     },
     async catalog() {
-      return Promise.all((await scan()).map(metadataFor));
+      return groupCatalog(await Promise.all((await scan()).map(metadataFor)));
     },
     async metadata(id) {
-      return (await this.catalog()).find(item => item.id === id) || null;
+      return (await this.catalog()).find(item => item.id === id || item.files?.some(file => file.id === id)) || null;
+    },
+    async members(id) {
+      const item = await this.metadata(id);
+      return item ? catalogMembers(item, id) : null;
     },
   };
 }
