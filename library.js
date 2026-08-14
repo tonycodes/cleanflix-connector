@@ -227,6 +227,11 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
     }];
   });
   const findItem = (items, id) => items.find(item => catalogAliases(item).has(id) || item.files?.some(file => file.id === id)) || null;
+  let indexGrouped = null;
+  const groupedFromIndex = () => {
+    if (!indexGrouped) indexGrouped = groupCatalog(itemsFromIndex());
+    return indexGrouped;
+  };
   return {
     scan,
     startReconciler(seconds = 900) {
@@ -252,7 +257,7 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       return findItem(await this.catalog(), id);
     },
     async members(id) {
-      const grouped = groupCatalog(cachedScan || itemsFromIndex());
+      const grouped = cachedScan ? groupCatalog(cachedScan) : groupedFromIndex();
       const item = findItem(grouped, id);
       return item ? catalogMembers(item, id) : null;
     },
