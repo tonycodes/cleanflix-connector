@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { guessit } from 'guessit-js';
+import { groupCatalog } from '../../library.js';
 
 const video = /\.(mkv|mp4|webm|m4v)$/i;
 const text = (source, tag) => source.match(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'i'))?.[1]?.trim();
@@ -37,81 +38,6 @@ const nfoFor = (mediaRoot, file) => {
     };
   } catch { return {}; }
 };
-
-const slug = value => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-
-export function catalogGroupKey(item) {
-  const imdb = item.imdbId || item.suggestedImdbId || null;
-  const episode = item.type === 'episode' || (item.season != null && item.episode != null);
-  if (episode) {
-    if (imdb) return imdb;
-    const title = slug(item.title);
-    return title || null;
-  }
-  if (imdb) return imdb;
-  const title = slug(item.title);
-  return title ? `${title}${item.year ? `-${item.year}` : ''}` : null;
-}
-
-const uniqueFiles = files => {
-  const seen = new Set();
-  return files.filter(file => {
-    if (seen.has(file.id)) return false;
-    seen.add(file.id);
-    return true;
-  });
-};
-
-export function groupCatalog(items) {
-  const groups = new Map();
-  for (const item of items) {
-    const key = catalogGroupKey(item) || item.id;
-    const members = groups.get(key);
-    if (members) members.push(item);
-    else groups.set(key, [item]);
-  }
-  return [...groups.entries()].flatMap(([id, members]) => {
-    const files = uniqueFiles(members
-      .filter(member => (member.size || 0) > 0)
-      .map(member => ({ id: member.id, file: member.file, size: member.size || 0 }))
-      .sort((a, b) => b.size - a.size || a.file.localeCompare(b.file)));
-    if (!files.length) return [];
-    const representative = members.find(member => member.id === files[0].id) || members[0];
-    const episodeMembers = members
-      .filter(member => (member.size || 0) > 0 && member.season != null && member.episode != null)
-      .sort((a, b) => (a.season - b.season) || (a.episode - b.episode) || String(a.file).localeCompare(String(b.file)));
-    const seenEp = new Set();
-    const episodes = [];
-    for (const member of episodeMembers) {
-      const ek = `${member.season}:${member.episode}`;
-      if (seenEp.has(ek)) continue;
-      seenEp.add(ek);
-      episodes.push({
-        id: member.id,
-        season: member.season,
-        episode: member.episode,
-        title: member.title,
-        file: member.file,
-        size: member.size,
-        imdbId: member.imdbId || member.suggestedImdbId || null,
-      });
-    }
-    if (episodes.length) {
-      return [{
-        ...representative,
-        id,
-        type: 'series',
-        season: null,
-        episode: null,
-        file: files[0].file,
-        files,
-        size: files[0].size,
-        episodes,
-      }];
-    }
-    return [{ ...representative, id, file: files[0].file, files, size: files[0].size }];
-  });
-}
 
 export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
   const metadataCache = new Map();
