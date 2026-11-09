@@ -34,16 +34,42 @@ test('metadata keeps path-id as an alias of the group', () => {
   assert.equal(catalogMembers(item, path)[0].file, 'copy-a.mp4');
 });
 
-test('episodes group by imdbId:season:episode and never collapse a series', () => {
+test('episodes become one series with episodes[] and keep duplicate files on the same S/E', () => {
   const items = [
     { id: 'e1', file: 'Show.S01E01.mkv', title: 'Show', year: 2020, imdbId: 'tt1111111', type: 'episode', season: 1, episode: 1, size: 1 },
     { id: 'e2', file: 'Show.S01E02.mkv', title: 'Show', year: 2020, imdbId: 'tt1111111', type: 'episode', season: 1, episode: 2, size: 1 },
     { id: 'e1b', file: 'Show.S01E01.alt.mkv', title: 'Show', year: 2020, imdbId: 'tt1111111', type: 'episode', season: 1, episode: 1, size: 2 },
   ];
   const catalog = groupCatalog(items);
-  assert.equal(catalog.length, 2);
-  assert.deepEqual(new Set(catalog.map(item => item.id)), new Set(['tt1111111:1:1', 'tt1111111:1:2']));
-  assert.equal(catalog.find(item => item.id === 'tt1111111:1:1').files.length, 2);
+  assert.equal(catalog.length, 1);
+  assert.equal(catalog[0].id, 'tt1111111');
+  assert.equal(catalog[0].type, 'series');
+  assert.equal(catalog[0].imdbId, 'tt1111111');
+  assert.deepEqual(catalog[0].episodes.map(episode => `${episode.season}:${episode.episode}`), ['1:1', '1:2']);
+  assert.equal(catalog[0].files.length, 3);
+  assert.equal(catalogMembers(catalog[0], 'e1b')[0].file, 'Show.S01E01.alt.mkv');
+});
+
+test('a season of 52 episodes is one catalog row with episodes[] E01-E52', () => {
+  const items = Array.from({ length: 52 }, (_, index) => ({
+    id: `e${index + 1}`,
+    file: `Bluey.S01E${String(index + 1).padStart(2, '0')}.mkv`,
+    title: 'Bluey',
+    imdbId: 'tt7678620',
+    type: 'episode',
+    season: 1,
+    episode: index + 1,
+    size: 10,
+  }));
+  const catalog = groupCatalog(items);
+  assert.equal(catalog.length, 1);
+  assert.notEqual(catalog.length, 52);
+  assert.equal(catalog[0].type, 'series');
+  assert.equal(catalog[0].id, 'tt7678620');
+  assert.equal(catalog[0].episodes.length, 52);
+  assert.notEqual(catalog[0].episodes.length, 1);
+  assert.equal(catalog[0].episodes[0].episode, 1);
+  assert.equal(catalog[0].episodes[51].episode, 52);
 });
 
 test('unmapped titles group by lowercase title and year', () => {

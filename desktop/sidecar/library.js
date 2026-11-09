@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { guessit } from 'guessit-js';
+import { groupCatalog } from '../../library.js';
 
 const video = /\.(mkv|mp4|webm|m4v)$/i;
 const text = (source, tag) => source.match(new RegExp(`<${tag}[^>]*>([^<]+)</${tag}>`, 'i'))?.[1]?.trim();
@@ -54,26 +55,30 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
     const type = item.type === 'episode' ? 'tv' : 'movie';
     const query = new URLSearchParams({ api_key: tmdbApiKey, query: item.title });
     if (item.year) query.set(type === 'movie' ? 'year' : 'first_air_date_year', item.year);
-    const results = await fetch(`https://api.themoviedb.org/3/search/${type}?${query}`).then(res => res.ok ? res.json() : { results: [] });
+    const results = await fetch(`https://api.themoviedb.org/3/search/${type}?${query}`).then(res => res.ok ? res.json() : { results: [] }).catch(() => ({ results: [] }));
     const candidate = results.results?.[0];
     if (!candidate) return item;
     const candidateTitle = candidate.title || candidate.name || '';
     const candidateYear = (candidate.release_date || candidate.first_air_date || '').slice(0, 4);
     const normalize = value => value.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const confident = Boolean(item.year) && normalize(candidateTitle) === normalize(item.title) && candidateYear === String(item.year);
+    const titleMatch = normalize(candidateTitle) === normalize(item.title);
+    const yearMatch = !item.year || candidateYear === String(item.year);
+    const confident = titleMatch && yearMatch;
     if (!confident) return { ...item, candidate: { title: candidateTitle, year: candidateYear, tmdbId: candidate.id } };
-    const external = await fetch(`https://api.themoviedb.org/3/${type}/${candidate.id}/external_ids?api_key=${tmdbApiKey}`).then(res => res.ok ? res.json() : {});
-    return { ...item, suggestedImdbId: external.imdb_id || null, autoMapped: Boolean(external.imdb_id), candidate: { title: candidateTitle, year: candidateYear, tmdbId: candidate.id } };
+    const external = await fetch(`https://api.themoviedb.org/3/${type}/${candidate.id}/external_ids?api_key=${tmdbApiKey}`).then(res => res.ok ? res.json() : {}).catch(() => ({}));
+    return { ...item, year: item.year || Number(candidateYear) || null, suggestedImdbId: external.imdb_id || null, autoMapped: Boolean(external.imdb_id), candidate: { title: candidateTitle, year: candidateYear, tmdbId: candidate.id } };
   };
   const tmdb = async (endpoint, query = {}) => {
     if (!tmdbApiKey) return null;
     const params = new URLSearchParams({ api_key: tmdbApiKey, ...query });
-    const response = await fetch(`https://api.themoviedb.org/3${endpoint}?${params}`);
-    return response.ok ? response.json() : null;
+    try {
+      const response = await fetch(`https://api.themoviedb.org/3${endpoint}?${params}`);
+      return response.ok ? response.json() : null;
+    } catch { return null; }
   };
   const imageUrl = (image, size) => image ? `https://image.tmdb.org/t/p/${size}${image}` : null;
   const metadataFor = async item => {
-    const key = `${item.imdbId || ''}:${item.title}:${item.year || ''}:${item.type}`;
+    const key = `${item.imdbId || ''}:${item.title}:${item.year || ''}:${item.type}:${item.file || ''}:${item.season || ''}:${item.episode || ''}`;
     if (metadataCache.has(key)) return metadataCache.get(key);
     const pending = (async () => {
       if (!tmdbApiKey) return item;
@@ -132,6 +137,7 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       return {
         file,
         id: Buffer.from(file).toString('base64url'),
+        size: stat.size,
         title: firstText(mapping.title) || firstText(nfo.title) || firstText(parsed.title) || path.basename(file, path.extname(file)),
         year: year(mapping.year) || year(nfo.year) || year(parsed.year),
         imdbId: mapping.imdbId || nfo.imdbId || parsed.imdb_id || file.match(/\btt\d{7,10}\b/i)?.[0]?.toLowerCase() || null,
@@ -164,7 +170,7 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
     catalogRefresh = (async () => {
       const items = await Promise.all((await scan()).map(metadataFor));
       catalogCache = items;
-      return items;
+      return groupCatalog(items);
     })().finally(() => { catalogRefresh = null; });
     return catalogRefresh;
   };
@@ -188,10 +194,10 @@ export function createLibrary(mediaRoot, indexPath, tmdbApiKey) {
       save(index);
     },
     async catalog() {
-      return catalogCache || refreshCatalog();
+      return catalogCache ? groupCatalog(catalogCache) : refreshCatalog();
     },
     async metadata(id) {
-      return (await this.catalog()).find(item => item.id === id) || null;
+      return (await this.catalog()).find(item => item.id === id || item.imdbId === id || item.episodes?.some(episode => episode.id === id)) || null;
     },
   };
 }
